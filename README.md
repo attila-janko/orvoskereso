@@ -9,6 +9,8 @@ Ez a repository egy Playwright alapú scraper scriptet tartalmaz a `https://kere
 - A csuszkat eloszor automatan probalja elhuzni, sikertelenseg eseten manualis fallback van.
 - Deduplikalt kimenetet ment `JSON` es `CSV` formatumban.
 - Minden talalathoz megprobal PDF-et menteni az adatlaprol (`Adatlap megtekintese` -> print/PDF).
+- Az oldalbol generalt PDF fallback alapbol KI van kapcsolva (`--pdf-fallback-page-pdf` kapcsoloval kerheto).
+ - Alapertelmezetten csak adatbazis-kimenet keszul (JSON/CSV), PDF letoltes kulon kapcsolhato.
 
 ## Telepites
 
@@ -29,13 +31,18 @@ Alapertelmezett kimenet:
 
 - `data/orvosok.json`
 - `data/orvosok.csv`
-- `data/pdfs/*.pdf`
 - `data/overflow_terms.json` (ha marad fel nem oldott 100-as csoport)
 
 Egybetus gyors teszt:
 
 ```bash
 python scraper_enkk.py --alphabet a --max-depth 1
+```
+
+PDF letoltes bekapcsolasa:
+
+```bash
+python scraper_enkk.py --download-pdfs
 ```
 
 ## Hasznos opciok
@@ -48,7 +55,9 @@ python scraper_enkk.py \
   --results-wait-ms 7000 \
   --manual-slider-attempts 4 \
   --manual-slider-wait-ms 3500 \
+  --download-pdfs \
   --max-pdfs-per-query 30 \
+  --pdf-fallback-page-pdf \
   --record-type "Orvos/fogorvos" \
   --no-force-submit \
   --pdf-dir data/pdfs

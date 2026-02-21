@@ -326,8 +326,6 @@ async def extract_rows(page: Page) -> dict[str, Any]:
                 break;
               }
             }
-            if (!detailLink && clickables.length > 0) detailLink = clickables[0];
-
             if (detailLink) {
               const href = normalize(detailLink.getAttribute('href'));
               const onclick = normalize(detailLink.getAttribute('onclick'));
@@ -414,20 +412,39 @@ def extract_url_from_js(js_code: str, base_url: str) -> str:
         token_norm = token.strip()
         if not token_norm:
             continue
+        if token_norm in {"/", "#"}:
+            continue
         if token_norm.startswith(("http://", "https://", "/")):
-            return urljoin(base_url, token_norm)
+            resolved = urljoin(base_url, token_norm)
+            if resolved.rstrip("/") == base_url.rstrip("/"):
+                continue
+            return resolved
         if any(fragment in token_norm.casefold() for fragment in ("adatlap", "pdf", "print")):
             return urljoin(base_url, token_norm)
     return ""
 
 
+def is_useless_detail_url(url: str, base_url: str) -> bool:
+    url_norm = normalize(url)
+    if not url_norm:
+        return True
+    if url_norm in {"/", "#"}:
+        return True
+    resolved = urljoin(base_url, url_norm)
+    if resolved.rstrip("/") == base_url.rstrip("/"):
+        return True
+    return False
+
+
 def detail_url_from_row(row: dict[str, Any], base_url: str) -> str:
     direct = normalize(row.get("_detail_url"))
-    if direct:
+    if direct and not is_useless_detail_url(direct, base_url):
         return direct
 
     href = normalize(row.get("_detail_href"))
-    if href and not href.casefold().startswith("javascript:"):
+    if href and not href.casefold().startswith("javascript:") and not is_useless_detail_url(
+        href, base_url
+    ):
         return urljoin(base_url, href)
 
     onclick = normalize(row.get("_detail_onclick"))
@@ -591,6 +608,9 @@ async def click_detail_on_results_row(page: Page, row_index: int) -> dict[str, A
               bestScore = currentScore;
             }
           }
+          if (bestScore <= 0) {
+            return { ok: false, reason: 'nincs_adatlap_elem' };
+          }
 
           const beforeUrl = window.location.href;
           chosen.click();
@@ -604,6 +624,34 @@ async def click_detail_on_results_row(page: Page, row_index: int) -> dict[str, A
         }
         """,
         row_index,
+    )
+
+
+async def is_probably_detail_page(detail_page: Page) -> bool:
+    return bool(
+        await detail_page.evaluate(
+            """
+            () => {
+              const text = (document.body?.innerText || '').toLowerCase();
+              const hasDetailMarkers =
+                text.includes('adatlapja') ||
+                text.includes('alapnyilvántartási adatok') ||
+                text.includes('egészségügyi tevékenység során használt név');
+
+              const hasMainSearchMarkers =
+                text.includes('tisztelt ügyfelünk') ||
+                text.includes('zárva, húzza el a csúszkát') ||
+                text.includes('név típusa');
+
+              const hasPrintVisual =
+                !!document.querySelector("img[src*='print'], img[src*='printer']");
+
+              if (hasDetailMarkers) return true;
+              if (hasMainSearchMarkers && !hasDetailMarkers) return false;
+              return hasPrintVisual;
+            }
+            """
+        )
     )
 
 
@@ -641,6 +689,9 @@ async def extract_pdf_from_open_detail_page(
     timeout_ms: int,
     page_pdf_fallback: bool,
 ) -> tuple[bool, str]:
+    if not await is_probably_detail_page(detail_page):
+        return False, "nem_adatlap_oldal"
+
     current_url = normalize(detail_page.url)
     if current_url and await try_download_pdf_by_url(
         request_context, current_url, destination, timeout_ms
@@ -656,6 +707,8 @@ async def extract_pdf_from_open_detail_page(
         return True, "print_download"
 
     if page_pdf_fallback:
+        if not await is_probably_detail_page(detail_page):
+            return False, "nem_adatlap_oldal"
         destination.parent.mkdir(parents=True, exist_ok=True)
         await detail_page.emulate_media(media="print")
         await detail_page.pdf(
@@ -786,6 +839,9 @@ async def run(args: argparse.Namespace) -> None:
             "A 'playwright' csomag nincs telepitve. Futtasd: "
             "'pip install -r requirements.txt' es utana 'playwright install chromium'."
         )
+
+    if args.db_only:
+        args.download_pdfs = False
 
     alphabet = list(dict.fromkeys(list(args.alphabet)))
     queue: deque[str] = deque(alphabet)
@@ -940,15 +996,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--download-pdfs",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="A talalati sorokhoz tartozo adatlap PDF-ek mentese.",
+    )
+    parser.add_argument(
+        "--db-only",
+        action="store_true",
+        help="Csak JSON/CSV kimenet, PDF letoltes nelkul.",
     )
     parser.add_argument("--pdf-dir", default="data/pdfs")
     parser.add_argument("--pdf-timeout-ms", type=int, default=15000)
     parser.add_argument(
         "--pdf-fallback-page-pdf",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Ha nincs direkt PDF, oldalbol generalt PDF fallback hasznalata.",
     )
     parser.add_argument(
